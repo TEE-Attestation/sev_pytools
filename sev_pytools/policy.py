@@ -115,7 +115,7 @@ class AttestationPolicy:
             else:
                 logger.info("Report data validation passed")
 
-        validation_results = []
+        failed_validations = []
         rules = self.policy.get("validation_rules", {})
 
         # Validate each field in the policy rules
@@ -128,21 +128,21 @@ class AttestationPolicy:
                     logger.error(
                         f"Field '{field_name}' not found in attestation report"
                     )
-                    validation_results.append((field_name, False))
+                    failed_validations.append(field_name)
                 else:
                     field_value = getattr(report, field_name)
-                    result = self._validate_object(field_value, field_rules, field_name)
-                    validation_results.append((field_name, result))
+                    failed_validations.extend(
+                        self._validate_object(field_value, field_rules, field_name)
+                    )
 
             except Exception as e:
                 logger.error(f"Error validating field '{field_name}': {e}")
-                validation_results.append((field_name, False))
+                failed_validations.append(field_name)
 
         # Check if all validations passed
-        failed_validations = [name for name, result in validation_results if not result]
         if failed_validations:
             raise PolicyValidationError(
-                f"Policy validation failed for: {', '.join(failed_validations)}"
+                f"Policy validation failed for field(s): {', '.join(failed_validations)}"
             )
 
         logger.info("All policy validations passed successfully!")
@@ -151,7 +151,7 @@ class AttestationPolicy:
 
     def _validate_object(
         self, obj: Any, rules: Dict[str, Any], obj_name: str = ""
-    ) -> bool:
+    ) -> List[str]:
         """
         Validate an object (simple field or nested object) against validation rules.
 
@@ -161,35 +161,35 @@ class AttestationPolicy:
             obj_name: Name of the object for verbose output
 
         Returns:
-            True if object passes validation
+            List of fully-qualified field paths that failed validation (empty if all passed)
         """
-        validation_passed = True
+        failed_fields: List[str] = []
 
         # Handle different types of validation rules
         for rule_type, rule_value in rules.items():
             if rule_type == "exact_match":
                 if not self._validate_exact_match(obj, rule_value, obj_name):
-                    validation_passed = False
+                    failed_fields.append(obj_name)
             elif rule_type == "min_value":
                 if not self._validate_min_value(obj, rule_value, obj_name):
-                    validation_passed = False
+                    failed_fields.append(obj_name)
             elif rule_type == "max_value":
                 if not self._validate_max_value(obj, rule_value, obj_name):
-                    validation_passed = False
+                    failed_fields.append(obj_name)
             elif rule_type == "allow_list":
                 if not self._validate_allow_list(obj, rule_value, obj_name):
-                    validation_passed = False
+                    failed_fields.append(obj_name)
             elif rule_type == "deny_list":
                 if not self._validate_deny_list(obj, rule_value, obj_name):
-                    validation_passed = False
+                    failed_fields.append(obj_name)
             elif rule_type == "boolean":
                 if not self._validate_boolean(obj, rule_value, obj_name):
-                    validation_passed = False
+                    failed_fields.append(obj_name)
             else:
                 # Handle nested attribute validation - get the attribute and validate it recursively
                 if not hasattr(obj, rule_type):
                     logger.error(f"Field '{rule_type}' not found in {obj_name}")
-                    validation_passed = False
+                    failed_fields.append(f"{obj_name}.{rule_type}" if obj_name else rule_type)
                 else:
                     attr_value = getattr(obj, rule_type)
                     attr_name = f"{obj_name}.{rule_type}" if obj_name else rule_type
@@ -197,20 +197,20 @@ class AttestationPolicy:
                     # Handle all validation rules recursively
                     if isinstance(rule_value, dict):
                         # Complex validation rules - recurse
-                        if not self._validate_object(attr_value, rule_value, attr_name):
-                            validation_passed = False
+                        failed_fields.extend(
+                            self._validate_object(attr_value, rule_value, attr_name)
+                        )
                     else:
                         # Simple values - wrap them in a rules dict and recurse
                         if isinstance(rule_value, bool):
                             wrapped_rules = {"boolean": rule_value}
                         else:
                             wrapped_rules = {"exact_match": rule_value}
-                        if not self._validate_object(
-                            attr_value, wrapped_rules, attr_name
-                        ):
-                            validation_passed = False
+                        failed_fields.extend(
+                            self._validate_object(attr_value, wrapped_rules, attr_name)
+                        )
 
-        return validation_passed
+        return failed_fields
 
     def _validate_exact_match(
         self, field_value: Any, expected_value: Any, field_name: str = ""
