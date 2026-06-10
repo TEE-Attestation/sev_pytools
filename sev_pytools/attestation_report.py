@@ -10,8 +10,8 @@ from typing import Optional
 
 from .guest_policy import GuestPolicy
 from .platform_info import PlatformInfo
-from .signature import Signature
 from .sev_logging import get_logger
+from .signature import Signature
 
 logger = get_logger(__name__)
 

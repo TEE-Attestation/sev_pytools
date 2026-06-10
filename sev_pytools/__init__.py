@@ -47,7 +47,6 @@ from .policy import (
     PolicyValidationError,
     validate_report_with_policy,
 )
-from .signature import Signature
 
 # Logging utilities
 from .sev_logging import (
@@ -62,6 +61,7 @@ from .sev_logging import (
     setup_library_logging,
     setup_logging,
 )
+from .signature import Signature
 
 # High-level verification functions
 from .verify import (

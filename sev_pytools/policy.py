@@ -4,7 +4,6 @@
 # Policy validation framework for AMD SEV-SNP attestation reports.
 
 import json
-import os
 from typing import Any, Dict, List, Optional, Union
 
 from .attestation_report import AttestationReport
@@ -55,11 +54,11 @@ class AttestationPolicy:
 
     def _load_policy_file(self, policy_file: str) -> Dict[str, Any]:
         """Load policy from JSON file."""
-        if not os.path.exists(policy_file):
+        try:
+            with open(policy_file, "r") as f:
+                return json.load(f)
+        except FileNotFoundError:
             raise FileNotFoundError(f"Policy file not found: {policy_file}")
-
-        with open(policy_file, "r") as f:
-            return json.load(f)
 
     def _validate_policy_structure(self) -> None:
         """Validate that the policy has the expected structure."""
@@ -189,7 +188,9 @@ class AttestationPolicy:
                 # Handle nested attribute validation - get the attribute and validate it recursively
                 if not hasattr(obj, rule_type):
                     logger.error(f"Field '{rule_type}' not found in {obj_name}")
-                    failed_fields.append(f"{obj_name}.{rule_type}" if obj_name else rule_type)
+                    failed_fields.append(
+                        f"{obj_name}.{rule_type}" if obj_name else rule_type
+                    )
                 else:
                     attr_value = getattr(obj, rule_type)
                     attr_name = f"{obj_name}.{rule_type}" if obj_name else rule_type

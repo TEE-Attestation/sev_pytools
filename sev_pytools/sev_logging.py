@@ -9,6 +9,7 @@ Logging utilities for sev_pytools
 This module provides centralized logging configuration for both library and CLI usage.
 """
 
+import copy
 import logging
 import sys
 from typing import Optional, Union
@@ -28,7 +29,8 @@ class ColoredFormatter(logging.Formatter):
     }
 
     def format(self, record):
-        # Apply color to the log level name
+        # Apply color to the log level name (on a copy to avoid polluting other handlers)
+        record = copy.copy(record)
         if record.levelname in self.COLORS:
             record.levelname = f"{self.COLORS[record.levelname]}{record.levelname}{self.COLORS['RESET']}"
         return super().format(record)
@@ -178,17 +180,21 @@ def log_function_exit(func_name: str, result=None) -> None:
         logger.debug(f"Exiting {func_name}")
 
 
-def log_verification_step(step: str, status: str, details: str = "") -> None:
+def log_verification_step(
+    step: str, status: str, details: str = "", log: Optional[logging.Logger] = None
+) -> None:
     """Log a verification step with status."""
+    _log = log or logger
     status_upper = status.upper()
+    detail_str = f" {details}" if details else ""
     if status_upper in ["PASS", "SUCCESS", "OK"]:
-        logger.info(f"✓ {step}: {status}" + (f" - {details}" if details else ""))
+        _log.info(f"✓ {step}:{detail_str} {status}")
     elif status_upper in ["FAIL", "FAILED", "ERROR"]:
-        logger.error(f"! {step}: {status}" + (f" - {details}" if details else ""))
+        _log.error(f"! {step}:{detail_str} {status}")
     elif status_upper in ["SKIP", "SKIPPED"]:
-        logger.warning(f"- {step}: {status}" + (f" - {details}" if details else ""))
+        _log.warning(f"- {step}:{detail_str} {status}")
     else:
-        logger.info(f"  {step}: {status}" + (f" - {details}" if details else ""))
+        _log.info(f"  {step}:{detail_str} {status}")
 
 
 def log_certificate_info(
@@ -213,7 +219,7 @@ def log_network_request(
 ) -> None:
     """Log network requests."""
     msg = f"{method} {url}"
-    if status_code:
+    if status_code is not None:
         msg += f" - Status: {status_code}"
     logger.debug(msg)
 
