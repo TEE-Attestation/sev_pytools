@@ -13,11 +13,22 @@ including parsing, verification, policy validation, and certificate management.
 # Core attestation report components
 from .attestation_report import AttestationReport, Cpuid, KeyInfo, TcbVersion, Version
 
+# Built-in AMD certificate authorities (ARK/ASK per processor family)
+from .builtin_certs import (
+    builtin_ark,
+    builtin_ask,
+    builtin_ca,
+    builtin_chains,
+    builtin_family_of_ark,
+    is_builtin_ark,
+)
+
 # Certificate and verification functions
 from .certs import (
     cert_verify_report,
     cert_verify_report_components,
     check_certificate_against_crl,
+    complete_certificates,
     load_certificates,
     load_crl,
     log_all_certs,
@@ -73,7 +84,7 @@ from .verify import (
     verify_certificate_chain_with_crl,
 )
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __author__ = "Isaac Matthews"
 
 __all__ = [
@@ -84,8 +95,16 @@ __all__ = [
     "GuestPolicy",
     "PlatformInfo",
     "Signature",
+    # Built-in AMD CA
+    "builtin_ark",
+    "builtin_ask",
+    "builtin_ca",
+    "builtin_chains",
+    "builtin_family_of_ark",
+    "is_builtin_ark",
     # Certificate functions
     "check_certificate_against_crl",
+    "complete_certificates",
     "load_certificates",
     "load_crl",
     "log_all_certs",

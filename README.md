@@ -274,12 +274,46 @@ This will perform both cryptographic verification of the attestation report and 
 
 ## Certificate Management
 
+### Built-in AMD Root Certificates
+
+The AMD Root Key (ARK) and AMD SEV Signing Key (ASK) certificates for Milan,
+Genoa (also used by Bergamo and Siena) and Turin are embedded as PEM constants,
+one module per family: `sev_pytools/amd_certs/{milan,genoa,turin}.py`, each
+exposing `ARK` and `ASK` (every family has its own self-signed ARK). They were
+taken from `https://kdsintf.amd.com/vcek/v1/<Family>/cert_chain` and
+cross-checked against the copies embedded in the `sev` Rust crate; the SHA-256
+fingerprints are recorded in each module.
+
+Consequences:
+
+- Only the per-chip VCEK (and the CRL) is ever fetched from the KDS.
+- **ARK/ASK are optional everywhere.** `load_certificates()`,
+  `verify_certificate_chain*()` and `verify_attestation_report()` only need the
+  VCEK; a missing ARK/ASK is filled from the built-ins (`complete_certificates()`).
+  The family comes from the processor model / the report's CPUID when known;
+  otherwise each built-in chain is tried and the one whose ASK actually signed the
+  VCEK is used. Certificates you do provide (e.g. from a directory) are still used.
+- Chain verification **pins the ARK**: whatever ARK is supplied (certs directory,
+  KDS, hypervisor certificate table) must be byte-for-byte one of the built-in
+  roots — for the report's processor family when the report carries CPUID
+  information (version 3+). A self-signed look-alike is rejected. Pass
+  `pin_ark=False` to `verify_certificate_chain()` to opt out.
+
+```python
+from sev_pytools import ProcType, builtin_ca, is_builtin_ark, verify_attestation_report
+
+ca = builtin_ca(ProcType.GENOA)        # {"ark": ..., "ask": ...}
+is_builtin_ark(some_cert, ProcType.TURIN)  # True only for the pinned Turin ARK
+
+# Only the VCEK is needed; ARK/ASK come from the built-ins
+verify_attestation_report(report, {"vcek": vcek}, crl, policy, report_data)
+```
+
 ### Automatic Certificate Fetching
 
-By default, the library automatically fetches certificates from AMD's Key Distribution Service (KDS):
+By default, the library automatically fetches from AMD's Key Distribution Service (KDS)
+what is not built in or already present locally:
 
-- AMD Root Key (ARK) Certificate
-- AMD SEV Signing Key (ASK) Certificate  
 - Versioned Chip Endorsement Key (VCEK) Certificate
 - Certificate Revocation List (CRL)
 
@@ -289,8 +323,8 @@ For offline verification or to avoid network requests, certificates are stored l
 
 ```
 certs/
-├── ark.pem          # AMD Root Key
-├── ask.pem          # AMD SEV Signing Key
+├── ark.pem          # AMD Root Key (optional: built in)
+├── ask.pem          # AMD SEV Signing Key (optional: built in)
 ├── crl.pem          # AMD CRL
 └── vcek.pem         # Versioned Chip Endorsement Key
 ```

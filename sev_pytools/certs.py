@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, rsa, u
 from cryptography.x509.extensions import ExtensionNotFound
 from cryptography.x509.oid import ObjectIdentifier
 
+from .builtin_certs import builtin_ca, builtin_chains, builtin_family_of_ark
 from .sev_logging import get_logger
 
 logger = get_logger(__name__)
@@ -33,11 +34,15 @@ class SnpOid(Enum):
         return self.value.dotted_string
 
 
-def load_certificates(cert_dir):
+def load_certificates(cert_dir, processor_model=None):
     """
     load_certificates
-    Description: Load required certificates from a directory
-    Input: cert_dir (str): Path to the directory containing certificates
+    Description: Load certificates from a directory. Only the VCEK is required:
+                 a missing ARK and/or ASK is taken from the built-in AMD
+                 certificates (see complete_certificates).
+    Inputs:
+        cert_dir (str): Path to the directory containing certificates
+        processor_model (ProcType or str, optional): Processor family of the built-in CA
     Output: dict: Dictionary of loaded certificates
     """
     certs = {}
@@ -69,13 +74,71 @@ def load_certificates(cert_dir):
 
                 certs[cert_type] = cert
 
-    missing_certs = set(required_certs) - set(certs.keys())
-    if missing_certs:
-        raise ValueError(
-            f"Missing required certificates: {', '.join(missing_certs).upper()}"
-        )
+    if "vcek" not in certs:
+        raise ValueError("Missing required certificates: VCEK")
+    return complete_certificates(certs, processor_model)
 
-    return certs
+
+def complete_certificates(certificates, processor_model=None):
+    """
+    complete_certificates
+    Description: Fill a missing ARK and/or ASK from the built-in AMD certificates.
+                 The chain is selected by processor model when given; otherwise
+                 each built-in chain is tried and the one whose ASK signed the
+                 VCEK is used. Certificates that are present are kept as given
+                 (the chain verification still pins the ARK).
+    Inputs:
+        certificates (dict): Must contain "vcek"; "ark" and "ask" are optional
+        processor_model (ProcType or str, optional): Processor family of the chain
+    Output: dict: New dictionary containing "ark", "ask" and "vcek"
+    Raises: ValueError if the VCEK is missing or was not issued by a built-in ASK
+    """
+    missing = {"ark", "ask"} - set(certificates)
+    if not missing:
+        return dict(certificates)
+    if "vcek" not in certificates:
+        raise ValueError("Missing required certificates: VCEK")
+
+    if processor_model is not None:
+        ca = builtin_ca(processor_model)
+    else:
+        ca = _builtin_ca_that_issued(certificates["vcek"])
+    family = builtin_family_of_ark(ca["ark"])
+
+    completed = dict(certificates)
+    for cert_type in sorted(missing):
+        logger.info(
+            f"{cert_type.upper()} not provided, using built-in AMD {family} certificate"
+        )
+        completed[cert_type] = ca[cert_type]
+    return completed
+
+
+def _builtin_ca_that_issued(vcek):
+    """Try each built-in chain and return the one whose ASK signed the VCEK."""
+    chains = builtin_chains()
+    for family, ca in chains.items():
+        if _is_signed_by(vcek, ca["ask"]):
+            logger.info(f"VCEK was issued by the built-in AMD {family} ASK")
+            return ca
+    raise ValueError(
+        f"The VCEK (issuer: {vcek.issuer.rfc4514_string()}) was not issued by any "
+        f"built-in AMD ASK ({', '.join(chains)})."
+    )
+
+
+def _is_signed_by(cert, issuer):
+    # Quiet variant of verify_certificate: failures are expected while probing chains.
+    try:
+        issuer.public_key().verify(
+            cert.signature,
+            cert.tbs_certificate_bytes,
+            padding=cert.signature_algorithm_parameters,
+            algorithm=cert.signature_hash_algorithm,
+        )
+    except Exception:
+        return False
+    return True
 
 
 def load_crl(crl_dir):

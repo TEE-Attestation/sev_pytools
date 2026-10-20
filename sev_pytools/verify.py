@@ -11,9 +11,11 @@ import struct
 from cryptography import x509
 
 from .attestation_report import AttestationReport
+from .builtin_certs import builtin_family_of_ark, is_builtin_ark
 from .certs import (
     cert_verify_report,
     check_certificate_against_crl,
+    complete_certificates,
     load_certificates,
     load_crl,
     log_all_certs,
@@ -26,9 +28,9 @@ from .fetch import (
     Endorsement,
     ProcType,
     cpuid_to_processor_type,
-    fetch_ca,
     fetch_crl,
-    fetch_vcek,
+    request_vcek_kds,
+    write_cert,
 )
 from .policy import (
     AttestationPolicy,
@@ -48,12 +50,17 @@ from .sev_logging import (
 logger = get_logger(__name__)
 
 
-def verify_certificate_chain(certificates):
+def verify_certificate_chain(certificates, processor_model=None, pin_ark=True):
     """
     Verify the SEV-SNP certificate chain (ARK -> ASK -> VCEK).
 
     Args:
-        certificates: Dictionary containing 'ark', 'ask', and 'vcek' certificates
+        certificates: Dictionary containing 'vcek' and optionally 'ark' and 'ask';
+            a missing ARK/ASK is taken from the built-in AMD certificates
+        processor_model: ProcType or str; selects the built-in chain and pins the
+            ARK to that family's root. If None, the chain is found by trying each
+            built-in family and the ARK must match one of the built-in roots.
+        pin_ark: Set False to accept an ARK that is not a built-in AMD root
 
     Returns:
         bool: True if certificate chain is valid
@@ -62,9 +69,23 @@ def verify_certificate_chain(certificates):
         ValueError: If any certificate verification fails
     """
     logger.debug("Starting certificate chain verification")
+    certificates = complete_certificates(certificates, processor_model)
+
+    # Check that the ARK is a pinned AMD root (a self-signature alone proves nothing)
+    ark_cert = certificates["ark"]
+    if pin_ark:
+        if not is_builtin_ark(ark_cert, processor_model):
+            expected = (
+                processor_model if processor_model is not None else "any known family"
+            )
+            raise ValueError(
+                f"The ARK is not the built-in AMD root certificate ({expected})."
+            )
+        log_verification_step(
+            f"ARK matches built-in AMD root ({builtin_family_of_ark(ark_cert)})", "PASS"
+        )
 
     # Check if the ARK certificate is self-signed
-    ark_cert = certificates["ark"]
     logger.debug("Verifying ARK self-signature")
     if not verify_certificate(ark_cert, ark_cert.public_key()):
         raise ValueError("The ARK is not self-signed.")
@@ -88,17 +109,21 @@ def verify_certificate_chain(certificates):
     return True
 
 
-def verify_certificate_chain_with_crl(certificates, crl=None):
+def verify_certificate_chain_with_crl(certificates, crl=None, processor_model=None):
     """
     verify_certificate_chain_with_crl
     Description: Verify the SEV-SNP certificate chain including CRL checks
     Inputs:
-        certificates: Dictionary containing 'ark', 'ask', and 'vcek' certificates
+        certificates: Dictionary containing 'vcek' and optionally 'ark' and 'ask'
+                      (missing ones come from the built-in AMD certificates)
         crl: x509.CertificateRevocationList object (optional)
+        processor_model: ProcType or str used to select/pin the chain (optional)
     Output: bool: True if certificate chain is valid and no certificates are revoked
     """
+    certificates = complete_certificates(certificates, processor_model)
+
     # Verify the basic certificate chain
-    verify_certificate_chain(certificates)
+    verify_certificate_chain(certificates, processor_model)
 
     # If CRL is provided, check each certificate against it
     if crl is not None:
@@ -107,17 +132,13 @@ def verify_certificate_chain_with_crl(certificates, crl=None):
         if not verify_crl(crl, ark_cert.public_key()):
             raise ValueError("The CRL is not signed by the ARK.")
         log_verification_step("CRL signature by ARK", "PASS")
-        log_subsection_header("Checking Certificates Against CRL")
+        log_subsection_header("Checking ASK Against CRL")
 
         # Check ASK certificate against CRL
         ask_cert = certificates["ask"]
         if not check_certificate_against_crl(ask_cert, crl):
             raise ValueError("ASK certificate is revoked according to CRL.")
-        # Check VCEK certificate against CRL
-        vcek_cert = certificates["vcek"]
-        if not check_certificate_against_crl(vcek_cert, crl):
-            raise ValueError("VCEK certificate is revoked according to CRL.")
-        log_verification_step("None of the certificates have been revoked.", "OK")
+        log_verification_step("ASK certificate has not been revoked.", "OK")
     else:
         logger.info("No CRL provided")
         return False
@@ -138,10 +159,12 @@ def verify_attestation_bytes(
 
     Args:
         report_bytes: Binary attestation report data
-        certificates_path: Path to certificates directory (if certificates not provided)
-        certificates: Dictionary of certificates (if already loaded)
+        certificates_path: Path to certificates directory (if certificates not provided).
+            Only the VCEK (and CRL) need to be there; ARK/ASK default to the built-ins
+        certificates: Dictionary of certificates (if already loaded); only 'vcek' is required
         crl: x509.CertificateRevocationList (if already loaded)
-        processor_model: Processor model for fetching certificates (default: "genoa")
+        processor_model: Processor model for fetching certificates (default: "genoa");
+            only used when the report does not carry CPUID information
         policy_path: Path to the policy file (if not provided, no policy validation will be performed)
 
     Returns:
@@ -153,10 +176,12 @@ def verify_attestation_bytes(
     """
     report = AttestationReport.unpack(report_bytes)
 
-    # Convert processor model to enum, detect from report if possible
+    # Family for KDS URLs: from the report when it carries CPUID, else the caller's hint.
+    # The built-in chain is only pre-selected when the report says; otherwise each is tried.
     proc_type = ProcType[processor_model.upper()]
+    chain_model = None
     if report.supports_cpuid:
-        proc_type = cpuid_to_processor_type(report.cpuid)
+        proc_type = chain_model = cpuid_to_processor_type(report.cpuid)
 
     # Load certificates if not provided
     if certificates is None:
@@ -168,31 +193,17 @@ def verify_attestation_bytes(
             logger.info(f"Creating certificates directory: {certificates_path}")
             os.makedirs(certificates_path, exist_ok=True)
 
-        # Check if certificates exist, if not fetch them
+        # ARK/ASK come from the built-in AMD certificates; only the VCEK is per-chip
         try:
-            certificates = load_certificates(certificates_path)
+            certificates = load_certificates(certificates_path, chain_model)
         except (ValueError, FileNotFoundError):
-            logger.info(f"Certificates not found, fetching from AMD KDS...")
-
-            # Fetch ARK and ASK certificates
-            fetch_ca(CertFormat.PEM, proc_type, certificates_path, Endorsement.VCEK)
-
-            # Create temporary file path for the attestation report
-            import tempfile
-
-            with tempfile.NamedTemporaryFile(delete=False) as temp:
-                temp.write(report_bytes)
-                temp_path = temp.name
-
-            # Fetch VCEK certificate using the report
-            fetch_vcek(CertFormat.PEM, proc_type, certificates_path, temp_path)
-
-            # Remove temporary file
-            os.unlink(temp_path)
-
-            # Now try loading certificates again
-            certificates = load_certificates(certificates_path)
-            logger.info("Certificates successfully fetched and loaded.")
+            logger.info("VCEK not found locally, fetching from AMD KDS...")
+            vcek = request_vcek_kds(proc_type, report=report)
+            write_cert(
+                certificates_path, "VCEK", vcek, CertFormat.PEM, Endorsement.VCEK
+            )
+            certificates = load_certificates(certificates_path, chain_model)
+            logger.info("VCEK successfully fetched and loaded.")
 
     # Load CRL if not provided
     if crl is None:
@@ -241,8 +252,14 @@ def cert_verify_attestation_report(
     log_section_header("CERTIFICATE VERIFICATION")
 
     log_subsection_header("Verifying Certificate Chain")
-    # Verify certificate chain
-    verify_certificate_chain_with_crl(certificates, crl)
+    # Pin the ARK to the report's processor family when the report tells us (v3+)
+    processor_model = None
+    if report.supports_cpuid:
+        try:
+            processor_model = cpuid_to_processor_type(report.cpuid)
+        except ValueError as e:
+            logger.warning(f"{e}; pinning ARK against all built-in AMD roots")
+    verify_certificate_chain_with_crl(certificates, crl, processor_model)
 
     # Check that the report is signed by the VCEK
     log_subsection_header("Verifying Attestation Report Signature")
@@ -338,7 +355,11 @@ def main():
     )
     parser.add_argument("--log-file", type=str, help="Path to log file (optional)")
     parser.add_argument(
-        "-c", "--certs", default="ca", help="Path to the certs directory (default: ca)"
+        "-c",
+        "--certs",
+        default="ca",
+        help="Path to the certs directory (default: ca). Holds the VCEK and CRL; "
+        "ARK/ASK are optional and default to the built-in AMD certificates",
     )
     parser.add_argument(
         "-r",
