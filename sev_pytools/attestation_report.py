@@ -205,12 +205,12 @@ class Cpuid:
     Description: Represents CPUID information from the attestation report
     """
 
-    family_id: Optional[
-        int
-    ] = None  # CPUID_FAM_ID - Combined Extended Family ID and Family ID
-    model_id: Optional[
-        int
-    ] = None  # CPUID_MOD_ID - Model (combined Extended Model and Model fields)
+    family_id: Optional[int] = (
+        None  # CPUID_FAM_ID - Combined Extended Family ID and Family ID
+    )
+    model_id: Optional[int] = (
+        None  # CPUID_MOD_ID - Model (combined Extended Model and Model fields)
+    )
     stepping: Optional[int] = None  # CPUID_STEP - Stepping
 
 
