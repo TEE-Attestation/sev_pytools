@@ -17,6 +17,7 @@ AMD SEV-SNP (Secure Encrypted Virtualization - Secure Nested Paging) is a confid
 - **Platform Information**: Platform capability and feature analysis
 - **Comprehensive Logging**: Detailed verification steps with configurable logging levels
 - **CLI Tools**: Ready-to-use command-line utilities for report inspection and verification
+- **TAS Trust Decision**: `sev-verify-tas` attests a running TEE Attestation Service (TAS) instance before you trust it with secrets
 
 ## Architecture
 
@@ -114,7 +115,7 @@ sev-verify -f report.bin -c ./certs/ -q policy.json
 
 **Options:**
 - `-f, --file`: Path to the attestation report file (default: `report.bin`)
-- `-c, --certs`: Path to the directory containing certificates (default: `ca`)
+- `-c, --certs`: Path to the directory containing certificates (default: the [certificate cache](#certificate-cache))
 - `-d, --debug`: Enable debug mode for additional output (automatically enables verbose mode)
 - `-v, --verbose`: Enable verbose mode for detailed information
 - `-r, --reportdata`: Print report data at the end of successful verification
@@ -138,9 +139,80 @@ sev-fetch vcek -p genoa -e PEM -d ./certs/ -r report.bin
 - `vcek`: Fetch VCEK certificate
 - `-p, --processor`: Processor model (e.g., milan, genoa) (default: `genoa`)
 - `-e, --encoding`: Certificate encoding format (PEM or DER)
-- `-d, --directory`: Directory to save the fetched certificates
+- `-d, --dir`: Directory to save the fetched certificates (default: the [certificate cache](#certificate-cache))
 - `--endorser`: Endorser type (vcek or vlek) for fetching VCEK or VLEK certificates
 - `-r, --report`: Path to the attestation report file (required for fetching VCEK)
+
+#### Certificate Cache
+
+All commands read and write certificates in the same directory unless `-c`/`-d`
+says otherwise: `$SEV_PYTOOLS_CERTS_DIR` if set, else `$XDG_CACHE_HOME/sev_pytools`,
+else `~/.cache/sev_pytools`. So `sev-fetch vcek -r report.bin` followed by
+`sev-verify -f report.bin` just works, and nothing is written into the current
+directory.
+
+#### Verify a TAS Instance (`sev-verify-tas`)
+
+Decide whether a TEE Attestation Service runs inside a genuine, correctly
+measured AMD SEV-SNP confidential VM — for example before an operator hands it
+secrets during setup. The tool requests TAS's TAS-attestation report
+(`POST /attest/v0/report` with `{"nonce": …}`), verifies it locally and ends with
+one of three verdicts on its last line:
+
+| Last line       | Exit | Meaning                                                                 |
+|-----------------|------|-------------------------------------------------------------------------|
+| `TRUSTED`       | 0    | Genuine SEV-SNP report, bound to this connection, policy satisfied      |
+| `NOT TRUSTED`   | 1    | Evidence against TAS: bad signature/measurement/policy, VLEK-signed, proxy detected, or TAS says it is not a CVM |
+| `UNDETERMINED`  | 2    | No verdict possible: TAS unreachable or busy (HTTP 429/503), key required, AMD KDS unreachable with a cold cache, bad arguments |
+
+Scripts should treat anything but exit 0 as "do not proceed", and only retry on 2.
+
+```bash
+# Expected launch measurement from the TAS image (e.g. sev-snp-measure output)
+sev-verify-tas https://tas.example.com -m cf9bcad1612a34b8...055627
+
+# Require a minimum platform TCB (any subset of bl/tee/snp/ucode) and an
+# up-to-date platform (reported TCB == current TCB; otherwise only a warning)
+sev-verify-tas https://tas.example.com -m <hex> --min-tcb bl=9,tee=0,snp=23,ucode=72 --require-tcb-match
+
+# TAS configured with TAS_ATTEST_REQUIRE_MANAGEMENT_API_KEY=true
+sev-verify-tas https://tas.example.com -m <hex> -k "$TAS_MANAGEMENT_API_KEY"
+
+# Policy file for everything else; -m still overrides the file's measurement
+sev-verify-tas https://tas.example.com -q policy.json -m <hex>
+```
+
+What is checked:
+
+1. **Freshness and TLS binding** — the report's `REPORT_DATA` must equal
+   `SHA-512("TAS-attest/v1" ‖ nonce ‖ SHA-256(TLS leaf certificate))`, where the certificate is
+   the one on the very connection that delivered the report. A plain proxy that
+   terminates TLS and relays a genuine CVM's report is therefore detected. The
+   TLS certificate does not need to chain to a CA you trust — attestation vouches
+   for it (pass `--ca-file` to validate it conventionally as well).
+2. **Signature chain** — the report must be VCEK-signed; built-in AMD root → ASK
+   → VCEK → report, plus a CRL that is within its validity period.
+3. **Trust policy** — expected `--measurement`, `--vmpl` (default 0), debug
+   disabled (always; a debug-enabled guest is readable by the hypervisor),
+   migration disabled (`--allow-migration` to relax), report version ≥ 2,
+   optional `--min-tcb` floor applied to both the reported and the current TCB.
+   Alternatively supply a full policy file with `--policy`.
+
+Certificate cache (`-c/--certs`, default: the [certificate cache](#certificate-cache)):
+`crl.pem` plus one `<chip id>-<reported TCB>/vcek.pem` per platform, so one
+directory serves many TAS instances and a firmware update never reuses a stale
+VCEK. The VCEK comes from the hypervisor's certificate table in the response
+when present, else the cache, else the AMD KDS; the CRL is refreshed from the
+KDS once it expires (AMD issues them for a few weeks). The table is only an
+optimisation: entries that are not AMD-issued or not for the report's chip and
+TCB (typically a host whose table was not refreshed after a firmware update)
+are ignored with a warning, never turned into a verdict. A populated cache with
+a current CRL works fully offline. Version 2 reports carry no CPUID, so pass
+`-p/--processor` for non-Genoa platforms.
+
+`--save-report FILE` keeps the raw report for `sev-print`. The response's
+`provider` must be `sev_guest`; a TAS running on another TEE is reported as
+NOT TRUSTED by this tool.
 
 ### Python API
 
@@ -343,7 +415,7 @@ or if installed with pip use `sev-fetch ...`.
 - `vcek`: Fetch VCEK certificate
 - `-p` or `--processor`: Processor model (e.g., milan, genoa) (default: genoa)
 - `-e` or `--encoding`: Certificate encoding format (PEM or DER)
-- `-d` or `--directory`: Directory to save the fetched certificates
+- `-d` or `--dir`: Directory to save the fetched certificates (default: `$SEV_PYTOOLS_CERTS_DIR` or `~/.cache/sev_pytools`)
 - `--endorser`: Endorser type (vcek or vlek) for fetching VCEK or VLEK certificates
 - `-r` or `--report`: Path to the attestation report file (required for fetching VCEK)
 

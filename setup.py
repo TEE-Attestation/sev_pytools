@@ -7,7 +7,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="sev_pytools",
-    version="0.6.0",
+    version="0.7.0",
     packages=find_packages(),
     install_requires=[
         "requests",
@@ -18,6 +18,7 @@ setup(
             "sev-fetch=sev_pytools.fetch:main",
             "sev-print=sev_pytools.print_report:main",
             "sev-verify=sev_pytools.verify:main",
+            "sev-verify-tas=sev_pytools.verify_tas:main",
         ],
     },
     description="Python tools for AMD SEV-SNP attestation",

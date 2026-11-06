@@ -20,6 +20,7 @@ from sev_pytools.builtin_certs import (
     is_builtin_ark,
 )
 from sev_pytools.certs import complete_certificates, verify_certificate
+from sev_pytools.fetch import default_certs_dir
 
 # One chain per KDS family; Bergamo and Siena use Genoa's.
 FAMILY_MODELS = [
@@ -203,3 +204,14 @@ def test_load_certificates_requires_vcek(tmp_path):
     )
     with pytest.raises(ValueError, match="Missing required certificates: VCEK"):
         load_certificates(str(tmp_path))
+
+
+def test_default_certs_dir_precedence(monkeypatch, tmp_path):
+    monkeypatch.delenv("SEV_PYTOOLS_CERTS_DIR", raising=False)
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert default_certs_dir() == str(tmp_path / ".cache" / "sev_pytools")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    assert default_certs_dir() == str(tmp_path / "xdg" / "sev_pytools")
+    monkeypatch.setenv("SEV_PYTOOLS_CERTS_DIR", "~/certs")
+    assert default_certs_dir() == str(tmp_path / "certs")

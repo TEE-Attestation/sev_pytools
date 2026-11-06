@@ -4,6 +4,7 @@
 # Command-line utility for verifying AMD SEV-SNP attestation reports.
 
 import argparse
+import datetime
 import json
 import os
 import struct
@@ -24,10 +25,12 @@ from .certs import (
     verify_crl,
 )
 from .fetch import (
+    CERTS_DIR_HELP,
     CertFormat,
     Endorsement,
     ProcType,
     cpuid_to_processor_type,
+    default_certs_dir,
     fetch_crl,
     request_vcek_kds,
     write_cert,
@@ -132,6 +135,11 @@ def verify_certificate_chain_with_crl(certificates, crl=None, processor_model=No
         if not verify_crl(crl, ark_cert.public_key()):
             raise ValueError("The CRL is not signed by the ARK.")
         log_verification_step("CRL signature by ARK", "PASS")
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if crl.next_update_utc and now > crl.next_update_utc:
+            raise ValueError(
+                f"The CRL expired on {crl.next_update_utc:%Y-%m-%d}; fetch a current CRL."
+            )
         log_subsection_header("Checking ASK Against CRL")
 
         # Check ASK certificate against CRL
@@ -186,7 +194,7 @@ def verify_attestation_bytes(
     # Load certificates if not provided
     if certificates is None:
         if certificates_path is None:
-            certificates_path = "ca"
+            certificates_path = default_certs_dir()
 
         # Create certificates directory if it doesn't exist
         if not os.path.exists(certificates_path):
@@ -357,9 +365,9 @@ def main():
     parser.add_argument(
         "-c",
         "--certs",
-        default="ca",
-        help="Path to the certs directory (default: ca). Holds the VCEK and CRL; "
-        "ARK/ASK are optional and default to the built-in AMD certificates",
+        default=None,
+        help=f"Path to the certs directory (default: {CERTS_DIR_HELP}). Holds the "
+        "VCEK and CRL; ARK/ASK are optional and default to the built-in AMD certificates",
     )
     parser.add_argument(
         "-r",
@@ -389,6 +397,8 @@ def main():
     )
 
     try:
+        if args.certs is None:
+            args.certs = default_certs_dir()
         logger.info(f"Starting verification of attestation report: {args.file}")
         logger.debug(f"Using certificates from: {args.certs}")
         logger.debug(f"Processor model: {args.processor}")
