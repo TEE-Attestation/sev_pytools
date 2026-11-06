@@ -34,6 +34,7 @@ from .certs import (
     log_all_certs,
     log_certificate_fields,
     log_crl_fields,
+    parse_cert_table,
     verify_certificate,
     verify_crl,
 )
@@ -84,7 +85,15 @@ from .verify import (
     verify_certificate_chain_with_crl,
 )
 
-__version__ = "0.6.0"
+# TAS-attestation verification
+from .verify_tas import (
+    TasUndeterminedError,
+    TasVerifyError,
+    build_policy,
+    verify_tas,
+)
+
+__version__ = "0.7.0"
 __author__ = "Isaac Matthews"
 
 __all__ = [
@@ -105,6 +114,7 @@ __all__ = [
     # Certificate functions
     "check_certificate_against_crl",
     "complete_certificates",
+    "parse_cert_table",
     "load_certificates",
     "load_crl",
     "log_all_certs",
@@ -134,6 +144,11 @@ __all__ = [
     "verify_certificate_chain_with_crl",
     "cert_verify_attestation_report",
     "policy_verify_attestation_report",
+    # TAS-attestation
+    "TasUndeterminedError",
+    "TasVerifyError",
+    "build_policy",
+    "verify_tas",
     # Logging utilities
     "get_logger",
     "setup_cli_logging",

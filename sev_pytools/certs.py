@@ -6,6 +6,8 @@
 import binascii
 import datetime
 import os
+import struct
+import uuid
 from enum import Enum
 
 from cryptography import x509
@@ -32,6 +34,73 @@ class SnpOid(Enum):
 
     def __str__(self):
         return self.value.dotted_string
+
+
+# GHCB certificate table GUIDs (SEV-SNP firmware ABI / GHCB spec), stored in
+# RFC 4122 byte order. This is the format of the configfs-tsm `auxblob` and of
+# the certificate buffer returned by SNP_GET_EXT_REPORT.
+CERT_TABLE_GUIDS = {
+    uuid.UUID("63da758d-e664-4564-adc5-f4b93be8accd"): "vcek",
+    uuid.UUID("a8074bc2-a25a-483e-aae6-39c045a0b8a1"): "vlek",
+    uuid.UUID("4ab7b379-bbac-4fe4-a02f-05aef327c782"): "ask",
+    uuid.UUID("c0b406a4-a803-4952-9743-3fb6014cd0ae"): "ark",
+    uuid.UUID("92f81bc3-5811-4d3d-97ff-d19f88dc67ea"): "crl",
+}
+_CERT_TABLE_ENTRY = struct.Struct("<16sII")  # guid, offset, length
+
+
+def parse_cert_table(blob):
+    """
+    parse_cert_table
+    Description: Decode a GHCB certificate table (configfs-tsm auxblob or the
+                 SNP_GET_EXT_REPORT certificate buffer) into certificates.
+    Input: blob (bytes): Raw table; empty or all-zero means "no certificates"
+    Output: dict: {"vcek": x509.Certificate, "ask": ..., "ark": ..., "crl":
+                   x509.CertificateRevocationList, ...}; unknown GUIDs are keyed
+                   by their string form and kept as raw bytes
+    Raises: ValueError if the table is malformed
+    """
+    entries = {}
+    offset = 0
+    while offset + _CERT_TABLE_ENTRY.size <= len(blob):
+        raw_guid, data_offset, data_length = _CERT_TABLE_ENTRY.unpack_from(blob, offset)
+        offset += _CERT_TABLE_ENTRY.size
+        if not any(raw_guid):  # zero GUID terminates the table
+            break
+        if data_offset + data_length > len(blob):
+            raise ValueError(
+                f"Certificate table entry at {offset - _CERT_TABLE_ENTRY.size} "
+                f"points outside the table (offset={data_offset}, length={data_length})"
+            )
+        name = CERT_TABLE_GUIDS.get(
+            uuid.UUID(bytes=raw_guid), str(uuid.UUID(bytes=raw_guid))
+        )
+        data = bytes(blob[data_offset : data_offset + data_length])
+        if name == "crl":
+            entries[name] = _load_crl_bytes(data)
+        elif name in ("vcek", "vlek", "ask", "ark"):
+            entries[name] = _load_cert_bytes(data)
+        else:
+            entries[name] = data
+    if entries:
+        logger.info(f"Certificate table contains: {', '.join(entries)}")
+    else:
+        logger.debug("Certificate table is empty")
+    return entries
+
+
+def _load_cert_bytes(data):
+    try:
+        return x509.load_der_x509_certificate(data)
+    except ValueError:
+        return x509.load_pem_x509_certificate(data)
+
+
+def _load_crl_bytes(data):
+    try:
+        return x509.load_der_x509_crl(data)
+    except ValueError:
+        return x509.load_pem_x509_crl(data)
 
 
 def load_certificates(cert_dir, processor_model=None):

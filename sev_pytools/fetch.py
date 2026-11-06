@@ -24,6 +24,21 @@ KDS_VERSION = "v1"
 KDS_CERT_CHAIN = "cert_chain"
 KDS_CRL = "crl"
 
+# Default certificate cache shared by all sev_pytools commands
+CERTS_DIR_ENV = "SEV_PYTOOLS_CERTS_DIR"
+CERTS_DIR_HELP = f"${CERTS_DIR_ENV} or ~/.cache/sev_pytools"
+
+
+def default_certs_dir() -> str:
+    """$SEV_PYTOOLS_CERTS_DIR, else $XDG_CACHE_HOME/sev_pytools, else ~/.cache/sev_pytools."""
+    override = os.environ.get(CERTS_DIR_ENV)
+    if override:
+        return os.path.expanduser(override)
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(
+        os.path.expanduser("~"), ".cache"
+    )
+    return os.path.join(base, "sev_pytools")
+
 
 # Enum classes for various certificate and processor types
 class Endorsement(enum.Enum):
@@ -406,8 +421,8 @@ def main():
         "-d",
         "--dir",
         type=str,
-        default=".",
-        help="Directory to save certificates (default: current directory)",
+        default=None,
+        help=f"Directory to save certificates (default: {CERTS_DIR_HELP})",
     )
     common_parser.add_argument(
         "-v",
@@ -474,6 +489,8 @@ def main():
         # Convert string arguments to enum types
         encoding = CertFormat[args.encoding.upper()]
         processor_model = ProcType[args.processor.upper()]
+        if args.dir is None:
+            args.dir = default_certs_dir()
 
         logger.info(
             f"Fetching {args.command} certificates for processor: {processor_model.value}"
