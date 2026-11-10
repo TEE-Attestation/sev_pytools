@@ -18,7 +18,7 @@ setup(
             "sev-fetch=sev_pytools.fetch:main",
             "sev-print=sev_pytools.print_report:main",
             "sev-verify=sev_pytools.verify:main",
-            "sev-verify-tas=sev_pytools.verify_tas:main",
+            "sev-verify-tas=sev_pytools.tas_verify:main",
         ],
     },
     description="Python tools for AMD SEV-SNP attestation",

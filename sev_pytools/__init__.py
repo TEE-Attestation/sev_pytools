@@ -75,6 +75,14 @@ from .sev_logging import (
 )
 from .signature import Signature
 
+# TAS-attestation verification
+from .tas_verify import (
+    TasUndeterminedError,
+    TasVerifyError,
+    build_policy,
+    verify_tas,
+)
+
 # High-level verification functions
 from .verify import (
     cert_verify_attestation_report,
@@ -83,14 +91,6 @@ from .verify import (
     verify_attestation_report,
     verify_certificate_chain,
     verify_certificate_chain_with_crl,
-)
-
-# TAS-attestation verification
-from .verify_tas import (
-    TasUndeterminedError,
-    TasVerifyError,
-    build_policy,
-    verify_tas,
 )
 
 __version__ = "0.7.0"

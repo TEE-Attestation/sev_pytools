@@ -24,8 +24,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from sev_pytools import AttestationReport, ProcType, builtin_ark, builtin_ask
 from sev_pytools.certs import SnpOid, parse_cert_table
 from sev_pytools.policy import PolicyValidationError
-from sev_pytools.verify import verify_certificate_chain_with_crl
-from sev_pytools.verify_tas import (
+from sev_pytools.tas_verify import (
     MANAGEMENT_KEY_HEADER,
     MAX_RESPONSE_BYTES,
     TasUndeterminedError,
@@ -41,6 +40,7 @@ from sev_pytools.verify_tas import (
     usable_table_certs,
     verify_tas,
 )
+from sev_pytools.verify import verify_certificate_chain_with_crl
 
 MEASUREMENT = "ab" * 48
 NONCE = bytes(range(32))
@@ -384,7 +384,7 @@ def _crl(next_update):
 def test_current_crl_prefers_fresh_sources_and_refreshes_expired(tmp_path):
     fresh = _crl(datetime.now(timezone.utc) + timedelta(days=1))
     expired = _crl(datetime.now(timezone.utc) - timedelta(days=1))
-    with patch("sev_pytools.verify_tas.request_crl_kds") as kds:
+    with patch("sev_pytools.tas_verify.request_crl_kds") as kds:
         # 1. table-supplied CRL is used when fresh, never the KDS
         assert current_crl(str(tmp_path), ProcType.GENOA, fresh) is fresh
         kds.assert_not_called()
@@ -493,8 +493,8 @@ def amd_issued():
         return {"ark": TEST_ARK, "ask": TEST_ARK, **certs}
 
     with (
-        patch("sev_pytools.verify_tas.complete_certificates", side_effect=complete),
-        patch("sev_pytools.verify_tas.builtin_ark", return_value=TEST_ARK),
+        patch("sev_pytools.tas_verify.complete_certificates", side_effect=complete),
+        patch("sev_pytools.tas_verify.builtin_ark", return_value=TEST_ARK),
     ):
         yield
 
@@ -533,15 +533,15 @@ def verified(server, amd_issued):
     """Patch the signature verification and CRL so the decision logic can be tested alone."""
     with (
         patch(
-            "sev_pytools.verify_tas.verify_attestation_bytes",
+            "sev_pytools.tas_verify.verify_attestation_bytes",
             side_effect=lambda report_bytes, **k: (
                 AttestationReport.unpack(report_bytes),
                 k["certificates"],
                 "",
             ),
         ) as vab,
-        patch("sev_pytools.verify_tas.request_crl_kds", return_value=FRESH_CRL),
-        patch("sev_pytools.verify_tas.os.urandom", return_value=NONCE),
+        patch("sev_pytools.tas_verify.request_crl_kds", return_value=FRESH_CRL),
+        patch("sev_pytools.tas_verify.os.urandom", return_value=NONCE),
     ):
         yield vab
 
@@ -564,7 +564,7 @@ def test_verify_tas_binds_report_data_and_uses_table_certs(server, verified, tmp
         ),
     )
     policy = build_policy(MEASUREMENT)
-    with patch("sev_pytools.verify_tas.policy_verify_attestation_report") as pol:
+    with patch("sev_pytools.tas_verify.policy_verify_attestation_report") as pol:
         report = verify_tas(server["url"], policy, certs_dir=str(tmp_path))
     assert report.measurement == bytes(48)
     assert verified.call_args.kwargs["certificates"] == {"vcek": TEST_VCEK}
@@ -582,8 +582,8 @@ def test_verify_tas_ignores_stale_table_and_uses_kds(server, verified, tmp_path)
         auxblob=_auxblob((VCEK_GUID, stale.public_bytes(serialization.Encoding.DER))),
     )
     with (
-        patch("sev_pytools.verify_tas.policy_verify_attestation_report"),
-        patch("sev_pytools.verify_tas.request_vcek_kds", return_value=TEST_VCEK) as kds,
+        patch("sev_pytools.tas_verify.policy_verify_attestation_report"),
+        patch("sev_pytools.tas_verify.request_vcek_kds", return_value=TEST_VCEK) as kds,
     ):
         verify_tas(server["url"], build_policy(MEASUREMENT), certs_dir=str(tmp_path))
     kds.assert_called_once()
@@ -597,8 +597,8 @@ def test_verify_tas_refetches_corrupt_cached_vcek(server, verified, tmp_path, ca
     cached.write_bytes(b"garbage")
     _serve(server)
     with (
-        patch("sev_pytools.verify_tas.policy_verify_attestation_report"),
-        patch("sev_pytools.verify_tas.request_vcek_kds", return_value=TEST_VCEK) as kds,
+        patch("sev_pytools.tas_verify.policy_verify_attestation_report"),
+        patch("sev_pytools.tas_verify.request_vcek_kds", return_value=TEST_VCEK) as kds,
     ):
         verify_tas(server["url"], build_policy(MEASUREMENT), certs_dir=str(tmp_path))
     kds.assert_called_once()
@@ -609,8 +609,8 @@ def test_verify_tas_refetches_corrupt_cached_vcek(server, verified, tmp_path, ca
 def test_verify_tas_processor_hint_for_v2_reports(server, verified, tmp_path):
     _serve(server)  # _report() is version 2: no CPUID in the report
     with (
-        patch("sev_pytools.verify_tas.policy_verify_attestation_report"),
-        patch("sev_pytools.verify_tas.request_vcek_kds", return_value=TEST_VCEK) as kds,
+        patch("sev_pytools.tas_verify.policy_verify_attestation_report"),
+        patch("sev_pytools.tas_verify.request_vcek_kds", return_value=TEST_VCEK) as kds,
     ):
         verify_tas(server["url"], build_policy(MEASUREMENT), certs_dir=str(tmp_path))
         assert kds.call_args.args[0] is ProcType.GENOA
@@ -628,8 +628,8 @@ def test_verify_tas_uses_cached_vcek_then_kds(server, verified, tmp_path):
     vcek = builtin_ask(ProcType.GENOA)
     _serve(server)
     with (
-        patch("sev_pytools.verify_tas.policy_verify_attestation_report"),
-        patch("sev_pytools.verify_tas.request_vcek_kds", return_value=vcek) as kds,
+        patch("sev_pytools.tas_verify.policy_verify_attestation_report"),
+        patch("sev_pytools.tas_verify.request_vcek_kds", return_value=vcek) as kds,
     ):
         verify_tas(server["url"], build_policy(MEASUREMENT), certs_dir=str(tmp_path))
         assert kds.call_count == 1
@@ -648,11 +648,11 @@ def test_verify_tas_policy_failure_is_not_trusted(server, verified, tmp_path):
     _serve(server)
     with (
         patch(
-            "sev_pytools.verify_tas.request_vcek_kds",
+            "sev_pytools.tas_verify.request_vcek_kds",
             return_value=builtin_ask(ProcType.GENOA),
         ),
         patch(
-            "sev_pytools.verify_tas.policy_verify_attestation_report",
+            "sev_pytools.tas_verify.policy_verify_attestation_report",
             side_effect=PolicyValidationError("measurement"),
         ),
     ):
@@ -677,9 +677,9 @@ def test_verify_tas_rejects_garbage_report(server, verified, tmp_path):
 def test_verify_tas_tcb_mismatch_warns_or_fails(server, verified, tmp_path, caplog):
     _serve(server, report=base64.b64encode(_report(current_snp=24)).decode())
     with (
-        patch("sev_pytools.verify_tas.policy_verify_attestation_report"),
+        patch("sev_pytools.tas_verify.policy_verify_attestation_report"),
         patch(
-            "sev_pytools.verify_tas.request_vcek_kds",
+            "sev_pytools.tas_verify.request_vcek_kds",
             return_value=builtin_ask(ProcType.GENOA),
         ),
     ):
@@ -710,16 +710,16 @@ def test_main_exit_codes(server, verified, tmp_path, capsys):
     _serve(server)
     args = (server["url"], "-m", MEASUREMENT, "-c", str(tmp_path), "--quiet")
     with patch(
-        "sev_pytools.verify_tas.request_vcek_kds",
+        "sev_pytools.tas_verify.request_vcek_kds",
         return_value=builtin_ask(ProcType.GENOA),
     ):
-        with patch("sev_pytools.verify_tas.policy_verify_attestation_report"):
+        with patch("sev_pytools.tas_verify.policy_verify_attestation_report"):
             assert _run_main(capsys, *args) == (
                 0,
                 f"TRUSTED: {server['url']} is running in a verified AMD SEV-SNP CVM",
             )
         with patch(
-            "sev_pytools.verify_tas.policy_verify_attestation_report",
+            "sev_pytools.tas_verify.policy_verify_attestation_report",
             side_effect=PolicyValidationError("measurement mismatch"),
         ):
             assert _run_main(capsys, *args)[0] == 1
@@ -756,10 +756,10 @@ def test_main_measurement_overrides_policy_file(
     monkeypatch.setenv("SEV_PYTOOLS_CERTS_DIR", str(tmp_path / "cache"))  # no -c
     with (
         patch(
-            "sev_pytools.verify_tas.request_vcek_kds",
+            "sev_pytools.tas_verify.request_vcek_kds",
             return_value=builtin_ask(ProcType.GENOA),
         ),
-        patch("sev_pytools.verify_tas.policy_verify_attestation_report") as pol,
+        patch("sev_pytools.tas_verify.policy_verify_attestation_report") as pol,
     ):
         code, _ = _run_main(
             capsys,
