@@ -93,7 +93,7 @@ from .verify import (
     verify_certificate_chain_with_crl,
 )
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 __author__ = "Isaac Matthews"
 
 __all__ = [
