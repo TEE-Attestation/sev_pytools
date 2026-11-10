@@ -308,12 +308,14 @@ Policies are defined in JSON format with the following structure:
 
 The following validation rule types are supported:
 
-- **exact_match**: Field must exactly match the specified value
+- **exact_match**: Field must exactly match the specified value. A non-boolean value given directly as the attribute value (e.g. `"vmpl": 0`) is shorthand for this rule.
 - **min_value**: Field must be greater than or equal to the specified minimum
 - **max_value**: Field must be less than or equal to the specified maximum
 - **allow_list**: Field value must be in the list of allowed values
 - **deny_list**: Field value must not be in the list of denied values
 - **boolean**: Field must match the specified boolean value (true/false). This can be specified using the boolean value as the attribute value directly.
+
+Byte fields (`measurement`, `host_data`, `report_data`, `id_key_digest`, `chip_id`, …) are written as hex strings in the policy, for `exact_match`, `allow_list` and `deny_list` alike. Case is ignored and an optional `0x` prefix is accepted. A value that is not valid hex fails the rule.
 
 #### Using Policy Validation
 

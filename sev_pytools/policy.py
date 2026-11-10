@@ -131,7 +131,9 @@ class AttestationPolicy:
                 else:
                     field_value = getattr(report, field_name)
                     failed_validations.extend(
-                        self._validate_object(field_value, field_rules, field_name)
+                        self._validate_object(
+                            field_value, self._as_rules(field_rules), field_name
+                        )
                     )
 
             except Exception as e:
@@ -195,23 +197,31 @@ class AttestationPolicy:
                     attr_value = getattr(obj, rule_type)
                     attr_name = f"{obj_name}.{rule_type}" if obj_name else rule_type
 
-                    # Handle all validation rules recursively
-                    if isinstance(rule_value, dict):
-                        # Complex validation rules - recurse
-                        failed_fields.extend(
-                            self._validate_object(attr_value, rule_value, attr_name)
+                    # Handle all validation rules recursively; a bare value is
+                    # shorthand for exact_match / boolean (see _as_rules).
+                    failed_fields.extend(
+                        self._validate_object(
+                            attr_value, self._as_rules(rule_value), attr_name
                         )
-                    else:
-                        # Simple values - wrap them in a rules dict and recurse
-                        if isinstance(rule_value, bool):
-                            wrapped_rules = {"boolean": rule_value}
-                        else:
-                            wrapped_rules = {"exact_match": rule_value}
-                        failed_fields.extend(
-                            self._validate_object(attr_value, wrapped_rules, attr_name)
-                        )
+                    )
 
         return failed_fields
+
+    @staticmethod
+    def _as_rules(rule_value: Any) -> Dict[str, Any]:
+        """
+        Normalise a policy rule value to a rules dict.
+
+        A dict is already a set of rules (or nested fields). A bare boolean is
+        shorthand for ``{"boolean": value}`` and any other bare value is
+        shorthand for ``{"exact_match": value}``. Applied uniformly to
+        top-level and nested fields so the shorthand works at any depth.
+        """
+        if isinstance(rule_value, dict):
+            return rule_value
+        if isinstance(rule_value, bool):
+            return {"boolean": rule_value}
+        return {"exact_match": rule_value}
 
     def _validate_exact_match(
         self, field_value: Any, expected_value: Any, field_name: str = ""
@@ -220,9 +230,13 @@ class AttestationPolicy:
         if isinstance(field_value, bytes):
             # Handle byte fields by converting expected hex string to bytes
             if isinstance(expected_value, str):
-                expected_bytes = bytes.fromhex(
-                    self._normalize_hex_string(expected_value)
-                )
+                try:
+                    expected_bytes = self._coerce_expected_value(
+                        field_value, expected_value
+                    )
+                except ValueError as e:
+                    logger.error(f"{field_name} exact_match is not valid hex: {e}")
+                    return False
                 if field_value != expected_bytes:
                     logger.error(f"{field_name} value mismatch:")
                     logger.error(f"   Expected: {expected_value}")
@@ -272,6 +286,23 @@ class AttestationPolicy:
         )
         return True
 
+    def _coerce_expected_value(self, field_value: Any, expected_value: Any) -> Any:
+        """
+        Convert a policy value to the type of the report field it is compared to.
+
+        Policies are JSON, so byte fields (measurement, host_data, ...) are
+        written as hex strings. When the report field is ``bytes`` and the
+        policy value is a ``str``, decode it (accepting an optional ``0x``
+        prefix and either case) so the comparison is bytes-to-bytes. Any other
+        value is returned unchanged.
+
+        Raises:
+            ValueError: If the string is not valid hex.
+        """
+        if isinstance(field_value, bytes) and isinstance(expected_value, str):
+            return bytes.fromhex(self._normalize_hex_string(expected_value))
+        return expected_value
+
     def _validate_allow_list(
         self,
         field_value: Any,
@@ -279,13 +310,22 @@ class AttestationPolicy:
         field_name: str = "",
     ) -> bool:
         """Validate that field value is in list of allowed values."""
-        if field_value not in allowed_values:
+        try:
+            allowed = [
+                self._coerce_expected_value(field_value, v) for v in allowed_values
+            ]
+        except ValueError as e:
+            logger.error(f"{field_name} allow list contains an invalid hex value: {e}")
+            return False
+        if field_value not in allowed:
             logger.error(
-                f"{field_name} value {field_value} not in allow list {allowed_values}"
+                f"{field_name} value {self._display(field_value)} not in allow list "
+                f"{allowed_values}"
             )
             return False
         logger.debug(
-            f"{field_name} allow list validation passed: {field_value} in {allowed_values}"
+            f"{field_name} allow list validation passed: {self._display(field_value)} "
+            f"in {allowed_values}"
         )
         return True
 
@@ -296,15 +336,30 @@ class AttestationPolicy:
         field_name: str = "",
     ) -> bool:
         """Validate that field value is not in list of denied values."""
-        if field_value in denied_values:
+        try:
+            denied = [
+                self._coerce_expected_value(field_value, v) for v in denied_values
+            ]
+        except ValueError as e:
+            # A deny list we cannot interpret must not silently allow the value.
+            logger.error(f"{field_name} deny list contains an invalid hex value: {e}")
+            return False
+        if field_value in denied:
             logger.error(
-                f"{field_name} value {field_value} found in deny list {denied_values}"
+                f"{field_name} value {self._display(field_value)} found in deny list "
+                f"{denied_values}"
             )
             return False
         logger.debug(
-            f"{field_name} deny list validation passed: {field_value} not in {denied_values}"
+            f"{field_name} deny list validation passed: {self._display(field_value)} "
+            f"not in {denied_values}"
         )
         return True
+
+    @staticmethod
+    def _display(value: Any) -> str:
+        """Render bytes as hex in log messages; other values via str()."""
+        return value.hex() if isinstance(value, bytes) else str(value)
 
     def _validate_boolean(
         self,
