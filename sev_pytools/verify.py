@@ -185,11 +185,11 @@ def verify_attestation_bytes(
     report = AttestationReport.unpack(report_bytes)
 
     # Family for KDS URLs: from the report when it carries CPUID, else the caller's hint.
-    # The built-in chain is only pre-selected when the report says; otherwise each is tried.
+    # The built-in ARK/ASK are not chosen by family: complete_certificates() picks the
+    # chain whose ASK signed the VCEK, and cert_verify_attestation_report() pins it.
     proc_type = ProcType[processor_model.upper()]
-    chain_model = None
     if report.supports_cpuid:
-        proc_type = chain_model = cpuid_to_processor_type(report.cpuid)
+        proc_type = cpuid_to_processor_type(report.cpuid)
 
     # Load certificates if not provided
     if certificates is None:
@@ -203,14 +203,14 @@ def verify_attestation_bytes(
 
         # ARK/ASK come from the built-in AMD certificates; only the VCEK is per-chip
         try:
-            certificates = load_certificates(certificates_path, chain_model)
+            certificates = load_certificates(certificates_path)
         except (ValueError, FileNotFoundError):
             logger.info("VCEK not found locally, fetching from AMD KDS...")
             vcek = request_vcek_kds(proc_type, report=report)
             write_cert(
                 certificates_path, "VCEK", vcek, CertFormat.PEM, Endorsement.VCEK
             )
-            certificates = load_certificates(certificates_path, chain_model)
+            certificates = load_certificates(certificates_path)
             logger.info("VCEK successfully fetched and loaded.")
 
     # Load CRL if not provided
@@ -380,7 +380,7 @@ def main():
         "-p",
         "--processor",
         default="genoa",
-        choices=["milan", "genoa", "bergamo", "siena"],
+        choices=["milan", "genoa", "bergamo", "siena", "turin"],
         help="Processor model for certificate fetching (default: genoa)",
     )
     parser.add_argument(

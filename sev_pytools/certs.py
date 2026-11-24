@@ -30,6 +30,7 @@ class SnpOid(Enum):
     Tee = ObjectIdentifier("1.3.6.1.4.1.3704.1.3.2")
     Snp = ObjectIdentifier("1.3.6.1.4.1.3704.1.3.3")
     Ucode = ObjectIdentifier("1.3.6.1.4.1.3704.1.3.8")
+    Fmc = ObjectIdentifier("1.3.6.1.4.1.3704.1.3.9")  # Turin and later only
     HwId = ObjectIdentifier("1.3.6.1.4.1.3704.1.4")
 
     def __str__(self):
@@ -292,6 +293,7 @@ def get_extension_value(cert, oid):
             SnpOid.Tee.value,
             SnpOid.Snp.value,
             SnpOid.Ucode.value,
+            SnpOid.Fmc.value,
         ]:
             return int.from_bytes(value.value[2:], byteorder="big")
         elif oid == SnpOid.HwId.value:
@@ -429,6 +431,8 @@ def cert_verify_report_components(report, cert):
         ("SNP", SnpOid.Snp),
         ("Microcode", SnpOid.Ucode),
     ]
+    if report.reported_tcb.fmc is not None:  # Turin+: the FMC SPL also keys the VCEK
+        tcb_components.append(("FMC", SnpOid.Fmc))
 
     for component_name, oid in tcb_components:
         cert_value = get_extension_value(cert, oid.value)
