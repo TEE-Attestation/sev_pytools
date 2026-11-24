@@ -80,6 +80,7 @@ REPORT_DATA_DOMAIN = b"TAS-attest/v1"
 MAX_RESPONSE_BYTES = 1 << 20
 TCB_FIELDS = ("bootloader", "tee", "snp", "microcode")
 TCB_ALIASES = {"bl": "bootloader", "ucode": "microcode"}
+MIN_TCB_FIELDS = ("fmc",) + TCB_FIELDS  # fmc exists on Turin and later only
 
 EXIT_TRUSTED, EXIT_NOT_TRUSTED, EXIT_UNDETERMINED = 0, 1, 2
 
@@ -276,6 +277,8 @@ def usable_table_certs(
             SnpOid.Snp: tcb.snp,
             SnpOid.Ucode: tcb.microcode,
         }
+        if tcb.fmc is not None:
+            expected[SnpOid.Fmc] = tcb.fmc
         try:
             ark = complete_certificates({"vcek": vcek})["ark"]
         except ValueError as e:
@@ -318,12 +321,12 @@ def _crl_signed_by(crl, ark) -> bool:
 # Policy
 # --------------------------------------------------------------------------- #
 def parse_min_tcb(spec: str) -> Dict[str, int]:
-    """Parse "bl=9,tee=0,snp=23,ucode=72" (any subset) into TCB field minimums."""
+    """Parse "bl=9,tee=0,snp=23,ucode=72[,fmc=1]" (any subset) into TCB field minimums."""
     minimums = {}
     for item in filter(None, re.split(r"[,\s]+", spec.strip())):
         name, sep, value = item.partition("=")
         name = TCB_ALIASES.get(name.lower(), name.lower())
-        if not sep or name not in TCB_FIELDS or not value.isdigit():
+        if not sep or name not in MIN_TCB_FIELDS or not value.isdigit():
             raise TasUndeterminedError(
                 f"--min-tcb: bad component {item!r}; use e.g. bl=9,tee=0,snp=23,ucode=72"
             )
@@ -387,7 +390,13 @@ def with_measurement(policy: AttestationPolicy, measurement: str) -> Attestation
 # Verification
 # --------------------------------------------------------------------------- #
 def _tcb_str(tcb) -> str:
-    return ".".join(str(getattr(tcb, f)) for f in TCB_FIELDS)
+    """bl.tee.snp.ucode; on Turin and later prefixed with the FMC SPL (fmc.bl.tee.snp.ucode)."""
+    fields = MIN_TCB_FIELDS if tcb.fmc is not None else TCB_FIELDS
+    return ".".join(str(getattr(tcb, f)) for f in fields)
+
+
+def _tcb_label(tcb) -> str:
+    return "(fmc.bl.tee.snp.ucode)" if tcb.fmc is not None else "(bl.tee.snp.ucode)"
 
 
 def _processor(report: AttestationReport, hint: Optional[ProcType] = None) -> ProcType:
@@ -574,7 +583,7 @@ def _summary(report: AttestationReport) -> str:
         f"migrate={'on' if policy.migrate_ma_allowed else 'off'} "
         f"smt={'on' if policy.smt_allowed else 'off'}",
         f"  TCB         : reported {_tcb_str(report.reported_tcb)}  "
-        f"current {_tcb_str(report.current_tcb)}  (bl.tee.snp.ucode)",
+        f"current {_tcb_str(report.current_tcb)}  {_tcb_label(report.reported_tcb)}",
         f"  Chip ID     : {report.chip_id.hex()[:32]}...",
     ]
     return "\n".join(lines)
@@ -639,7 +648,8 @@ def main():
     )
     parser.add_argument(
         "--min-tcb",
-        help="Minimum TCB, e.g. bl=9,tee=0,snp=23,ucode=72 (applies to reported and current TCB)",
+        help="Minimum TCB, e.g. bl=9,tee=0,snp=23,ucode=72 (Turin also fmc=1); applies "
+        "to reported and current TCB",
     )
     parser.add_argument(
         "--require-tcb-match",

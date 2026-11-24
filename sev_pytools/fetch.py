@@ -258,13 +258,14 @@ def request_vcek_kds(
             )
 
     hw_id = report.get_hwid()
+    tcb = report.reported_tcb
     url = (
         f"{KDS_CERT_SITE}/vcek/{KDS_VERSION}/{processor_model.to_kds_url()}/"
-        f"{hw_id}?blSPL={report.reported_tcb.bootloader:02}&"
-        f"teeSPL={report.reported_tcb.tee:02}&"
-        f"snpSPL={report.reported_tcb.snp:02}&"
-        f"ucodeSPL={report.reported_tcb.microcode:02}"
+        f"{hw_id}?blSPL={tcb.bootloader:02}&teeSPL={tcb.tee:02}&"
+        f"snpSPL={tcb.snp:02}&ucodeSPL={tcb.microcode:02}"
     )
+    if tcb.fmc is not None:  # Turin+: the FMC SPL selects the VCEK like the other SPLs
+        url += f"&fmcSPL={tcb.fmc:02}"
 
     logger.info("Fetching VCEK certificate from AMD KDS")
     logger.debug(f"URL: {url}")
@@ -413,7 +414,7 @@ def main():
         "-p",
         "--processor",
         type=str,
-        choices=["milan", "genoa", "bergamo", "siena"],
+        choices=["milan", "genoa", "bergamo", "siena", "turin"],
         default="genoa",
         help="Processor model",
     )

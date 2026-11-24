@@ -119,7 +119,7 @@ sev-verify -f report.bin -c ./certs/ -q policy.json
 - `-d, --debug`: Enable debug mode for additional output (automatically enables verbose mode)
 - `-v, --verbose`: Enable verbose mode for detailed information
 - `-r, --reportdata`: Print report data at the end of successful verification
-- `-p, --processor`: Processor model (e.g., milan, genoa) used only if no certificates found (default: `genoa`)
+- `-p, --processor`: Processor model (milan, genoa, bergamo, siena, turin) used only if no certificates found and the report carries no CPUID (default: `genoa`)
 - `-q, --policy`: Path to the policy file for validating the report against security policies (optional)
 
 #### Fetch Certificates from AMD KDS
@@ -137,7 +137,7 @@ sev-fetch vcek -p genoa -e PEM -d ./certs/ -r report.bin
 **Options:**
 - `ca`: Fetch ARK and ASK certificates
 - `vcek`: Fetch VCEK certificate
-- `-p, --processor`: Processor model (e.g., milan, genoa) (default: `genoa`)
+- `-p, --processor`: Processor model (milan, genoa, bergamo, siena, turin) (default: `genoa`)
 - `-e, --encoding`: Certificate encoding format (PEM or DER)
 - `-d, --dir`: Directory to save the fetched certificates (default: the [certificate cache](#certificate-cache))
 - `--endorser`: Endorser type (vcek or vlek) for fetching VCEK or VLEK certificates
@@ -195,7 +195,9 @@ What is checked:
 3. **Trust policy** — expected `--measurement`, `--vmpl` (default 0), debug
    disabled (always; a debug-enabled guest is readable by the hypervisor),
    migration disabled (`--allow-migration` to relax), report version ≥ 2,
-   optional `--min-tcb` floor applied to both the reported and the current TCB.
+   optional `--min-tcb` floor applied to both the reported and the current TCB
+   (`bl`, `tee`, `snp`, `ucode`; on Turin also `fmc`, the FMC SPL that Turin
+   adds to the TCB and to the VCEK derivation).
    Alternatively supply a full policy file with `--policy`.
 
 Certificate cache (`-c/--certs`, default: the [certificate cache](#certificate-cache)):
@@ -415,7 +417,7 @@ or if installed with pip use `sev-fetch ...`.
 
 - `ca`: Fetch ARK and ASK certificates
 - `vcek`: Fetch VCEK certificate
-- `-p` or `--processor`: Processor model (e.g., milan, genoa) (default: genoa)
+- `-p` or `--processor`: Processor model (milan, genoa, bergamo, siena, turin) (default: genoa)
 - `-e` or `--encoding`: Certificate encoding format (PEM or DER)
 - `-d` or `--dir`: Directory to save the fetched certificates (default: `$SEV_PYTOOLS_CERTS_DIR` or `~/.cache/sev_pytools`)
 - `--endorser`: Endorser type (vcek or vlek) for fetching VCEK or VLEK certificates
